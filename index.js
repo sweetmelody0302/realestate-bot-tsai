@@ -12,7 +12,7 @@ const lineConfig = {
 const client = new line.Client(lineConfig);
 
 // ==========================================
-// 1. Webhook (被動回覆)
+// 1. Webhook (被動接收訊息)
 // ==========================================
 app.post('/webhook', line.middleware(lineConfig), (req, res) => {
   Promise.all(req.body.events.map(handleEvent))
@@ -36,21 +36,39 @@ async function handleEvent(event) {
       body: JSON.stringify({
         inputs: {},
         query: event.message.text,
-        response_mode: "blocking", // 🚨 暴力破解：強制使用 blocking
+        response_mode: "streaming", // 乖乖用 streaming
         user: event.source.userId
       })
     });
 
     if (!response.ok) throw new Error(`Dify API 錯誤: ${response.status}`);
 
-    const data = await response.json();
-    let answer = data.answer;
+    let fullAnswer = "";
+    const decoder = new TextDecoder("utf-8");
+    let buffer = ""; // 🚨 終極修復：加入緩衝區黏合斷句
 
-    if (!answer) {
-      answer = "搜尋完畢，但目前沒有找到合適的資料，請稍後再試。";
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); // 把不完整的片段留到下一圈黏合
+
+      for (const line of lines) {
+        if (line.trim().startsWith('data:')) {
+          try {
+            const jsonStr = line.replace(/^data:\s*/, '').trim();
+            if (jsonStr === '[DONE]') continue;
+            const data = JSON.parse(jsonStr);
+            if (data.answer) fullAnswer += data.answer;
+          } catch (e) {} // 忽略解析雜訊
+        }
+      }
     }
 
-    return client.replyMessage(event.replyToken, { type: 'text', text: answer });
+    if (!fullAnswer || fullAnswer.trim() === "") {
+      fullAnswer = "搜尋完畢，但目前沒有找到合適的資料，請稍後再試。";
+    }
+
+    return client.replyMessage(event.replyToken, { type: 'text', text: fullAnswer });
     
   } catch (error) {
     console.error('Dify 連線失敗:', error);
@@ -75,21 +93,39 @@ app.post('/push-news', async (req, res) => {
       body: JSON.stringify({
         inputs: {},
         query: "請搜尋今天台灣房地產的5則最新新聞，並加上摘要與連結，整理成專業推播文",
-        response_mode: "blocking", // 🚨 暴力破解：強制使用 blocking
+        response_mode: "streaming", // 乖乖用 streaming
         user: "system-auto-push"
       })
     });
 
     if (!response.ok) throw new Error(`Dify API 錯誤: ${response.status}`);
 
-    const data = await response.json();
-    let answer = data.answer;
+    let fullAnswer = "";
+    const decoder = new TextDecoder("utf-8");
+    let buffer = ""; // 🚨 終極修復：加入緩衝區黏合斷句
 
-    if (!answer) {
-        answer = "今日房產新聞整理中，請稍後再為您奉上！";
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop(); 
+
+      for (const line of lines) {
+        if (line.trim().startsWith('data:')) {
+          try {
+            const jsonStr = line.replace(/^data:\s*/, '').trim();
+            if (jsonStr === '[DONE]') continue;
+            const data = JSON.parse(jsonStr);
+            if (data.answer) fullAnswer += data.answer;
+          } catch (e) {}
+        }
+      }
     }
 
-    await client.broadcast({ type: 'text', text: answer });
+    if (!fullAnswer || fullAnswer.trim() === "") {
+        fullAnswer = "今日房產新聞整理中，請稍後再為您奉上！";
+    }
+
+    await client.broadcast({ type: 'text', text: fullAnswer });
     res.status(200).send('✅ 每日新聞推播成功！');
     
   } catch (error) {
