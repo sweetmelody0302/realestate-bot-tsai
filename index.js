@@ -77,5 +77,74 @@ async function handleEvent(event) {
     });
   }
 }
+// ====== 新增：每日自動推播新聞的入口 ======
+app.post('/push-news', async (req, res) => {
+  try {
+    // 1. 叫大腦自己去查今天的新聞（因為不用打字給用戶看，所以用 blocking 模式即可）
+    const difyResponse = await fetch('https://api.dify.ai/v1/chat-messages', {
+      method: 'POST',
+      headers: { 
+        'Authorization': `Bearer ${process.env.DIFY_API_KEY}`, 
+        'Content-Type': 'application/json' 
+      },
+      body: JSON.stringify({
+        inputs: {},
+        query: "請搜尋今天台灣房地產的5則最新新聞，並加上摘要與連結，整理成專業推播文",
+        response_mode: "blocking", 
+        user: "system-auto-push"
+      })
+    });
 
+    const data = await difyResponse.json();
+    let newsMessage = data.answer;
+    
+    // 如果大腦偷懶沒回話的防呆機制
+    if (!newsMessage) {
+        newsMessage = "今日房產新聞整理中，請稍後再為您奉上！";
+    }
+
+    // 2. 把整理好的新聞廣播給所有加入蔡總好友的人
+    await client.broadcast({ type: 'text', text: newsMessage });
+    
+    res.status(200).send('✅ 每日新聞推播成功！');
+  } catch (error) {
+    console.error('推播失敗:', error);
+    res.status(500).send('❌ 推播失敗');
+  }
+});
+// ====== 取代 n8n 的每日自動推播按鈕 ======
+app.post('/push-news', async (req, res) => {
+  try {
+    // 1. 叫大腦自己去查今天的新聞（因為不用打字給用戶看，直接用 blocking 模式）
+    const response = await fetch('https://api.dify.ai/v1/chat-messages', {
+      method: 'POST',
+      headers: { 
+        'Authorization': `Bearer ${process.env.DIFY_API_KEY}`, 
+        'Content-Type': 'application/json' 
+      },
+      body: JSON.stringify({
+        inputs: {},
+        query: "請搜尋今天台灣房地產的5則最新新聞，並加上摘要與連結，整理成專業推播文",
+        response_mode: "blocking", 
+        user: "system-auto-push"
+      })
+    });
+
+    const data = await response.json();
+    let newsMessage = data.answer;
+    
+    // 防呆：如果大腦沒抓到資料
+    if (!newsMessage || newsMessage.trim() === "") {
+        newsMessage = "今日房產新聞整理中，請稍後再為您奉上！";
+    }
+
+    // 2. 把整理好的新聞，廣播給所有加入蔡總好友的人
+    await client.broadcast({ type: 'text', text: newsMessage });
+    
+    res.status(200).send('✅ 每日新聞推播成功！');
+  } catch (error) {
+    console.error('推播失敗:', error);
+    res.status(500).send('❌ 推播失敗');
+  }
+});
 app.listen(port, () => console.log(`🚀 蔡承宏機器人正在 Port ${port} 運行中`));
