@@ -3,7 +3,6 @@ const line = require('@line/bot-sdk');
 require('dotenv').config();
 
 const app = express();
-// 強制固定 10000 埠
 const port = 10000; 
 
 const lineConfig = {
@@ -12,8 +11,8 @@ const lineConfig = {
 };
 const client = new line.Client(lineConfig);
 
-// 接收 LINE 訊息的入口
-app.post('/webhook', express.json(), line.middleware(lineConfig), (req, res) => {
+// 🚨 關鍵修復：這裡已經把雞婆的 express.json() 拿掉了！
+app.post('/webhook', line.middleware(lineConfig), (req, res) => {
   Promise.all(req.body.events.map(handleEvent))
     .then((result) => res.json(result))
     .catch((err) => {
@@ -26,7 +25,6 @@ async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'text') return Promise.resolve(null);
   
   try {
-    // 呼叫 Dify 大腦 (Agent 模式強制要求使用 streaming)
     const response = await fetch('https://api.dify.ai/v1/chat-messages', {
       method: 'POST',
       headers: { 
@@ -36,7 +34,7 @@ async function handleEvent(event) {
       body: JSON.stringify({
         inputs: {},
         query: event.message.text,
-        response_mode: "streaming", // 關鍵修復：改為串流模式
+        response_mode: "streaming", 
         user: event.source.userId
       })
     });
@@ -45,7 +43,6 @@ async function handleEvent(event) {
       throw new Error(`Dify 伺服器回應錯誤: ${response.status}`);
     }
 
-    // 將串流的碎片組合起來
     let fullAnswer = "";
     const decoder = new TextDecoder("utf-8");
     
@@ -56,7 +53,6 @@ async function handleEvent(event) {
         if (line.startsWith('data: ')) {
           try {
             const data = JSON.parse(line.substring(6));
-            // 只抓取答案部分，過濾掉 AI 的內部思考過程
             if (data.answer) {
               fullAnswer += data.answer;
             }
@@ -67,12 +63,10 @@ async function handleEvent(event) {
       }
     }
 
-    // 如果沒有拿到答案的防呆機制
     if (!fullAnswer || fullAnswer.trim() === "") {
       fullAnswer = "搜尋完畢，但目前沒有找到合適的資料，請稍後再試。";
     }
 
-    // 將最終組合好的文字傳回給 LINE
     return client.replyMessage(event.replyToken, { type: 'text', text: fullAnswer });
     
   } catch (error) {
