@@ -4,8 +4,7 @@ const line = require('@line/bot-sdk');
 require('dotenv').config();
 
 const app = express();
-const port = process.env.PORT || 10000;
-
+const port = 10000;
 // 2. LINE 通訊設定
 const lineConfig = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
