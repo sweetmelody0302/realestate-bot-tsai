@@ -1,49 +1,32 @@
-// 1. 引入必要零件
 const express = require('express');
 const line = require('@line/bot-sdk');
 require('dotenv').config();
 
 const app = express();
-const port = 10000;
-// 2. LINE 通訊設定
+// 強制固定 10000 埠
+const port = 10000; 
+
 const lineConfig = {
   channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.CHANNEL_SECRET,
 };
 const client = new line.Client(lineConfig);
 
-// 3. 測試首頁 (確定伺服器有活著)
-app.get('/', (req, res) => { res.send('🏡 蔡承宏房地產 AI 系統已啟動！'); });
-
-// 4. 接收 LINE 訊息的入口 (Webhook)
-app.post('/webhook', line.middleware(lineConfig), (req, res) => {
+// 接收 LINE 訊息的入口
+app.post('/webhook', express.json(), line.middleware(lineConfig), (req, res) => {
   Promise.all(req.body.events.map(handleEvent))
     .then((result) => res.json(result))
     .catch((err) => {
-      console.error('發生錯誤：', err);
+      console.error('Webhook 處理錯誤:', err);
       res.status(500).end();
     });
 });
 
-// 5. 處理每一條訊息的詳細步驟
 async function handleEvent(event) {
-  // 只處理文字訊息，其餘（貼圖、圖片等）直接跳過
-  if (event.type !== 'message' || event.message.type !== 'text') {
-    return Promise.resolve(null);
-  }
-
-  const userMessage = event.message.text;
-
+  if (event.type !== 'message' || event.message.type !== 'text') return Promise.resolve(null);
+  
   try {
-    // 🌟 幫大腦戴上手錶：計算現在的國曆與農曆時間
-    const now = new Date();
-    const solarTime = now.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
-    const lunarTime = new Intl.DateTimeFormat('zh-TW-u-ca-chinese', { 
-        dateStyle: 'long', 
-        timeZone: 'Asia/Taipei' 
-    }).format(now);
-
-    // 🚀 向 Dify 大腦請求答案
+    // 呼叫 Dify 大腦 (Agent 模式強制要求使用 streaming)
     const response = await fetch('https://api.dify.ai/v1/chat-messages', {
       method: 'POST',
       headers: { 
@@ -52,38 +35,53 @@ async function handleEvent(event) {
       },
       body: JSON.stringify({
         inputs: {},
-        // 將時間資訊塞入 query，讓 Dify 知道現在是幾號
-        query: `[系統提示：現在是 ${solarTime}，農曆 ${lunarTime}]\n${userMessage}`,
-        response_mode: "blocking",
-        user: event.source.userId // 讓 Dify 記住這位客人的對話紀錄
+        query: event.message.text,
+        response_mode: "streaming", // 關鍵修復：改為串流模式
+        user: event.source.userId
       })
     });
 
-    const data = await response.json();
-
     if (!response.ok) {
-      throw new Error(data.message || '呼叫 Dify API 失敗');
+      throw new Error(`Dify 伺服器回應錯誤: ${response.status}`);
     }
 
-    // 取得 Dify 產出的專業房產回答
-    const aiAnswer = data.answer;
+    // 將串流的碎片組合起來
+    let fullAnswer = "";
+    const decoder = new TextDecoder("utf-8");
+    
+    for await (const chunk of response.body) {
+      const text = decoder.decode(chunk);
+      const lines = text.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.substring(6));
+            // 只抓取答案部分，過濾掉 AI 的內部思考過程
+            if (data.answer) {
+              fullAnswer += data.answer;
+            }
+          } catch (e) {
+            // 忽略解析錯誤
+          }
+        }
+      }
+    }
 
-    // 💬 將答案回傳給 LINE 客戶
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: aiAnswer
-    });
+    // 如果沒有拿到答案的防呆機制
+    if (!fullAnswer || fullAnswer.trim() === "") {
+      fullAnswer = "搜尋完畢，但目前沒有找到合適的資料，請稍後再試。";
+    }
 
+    // 將最終組合好的文字傳回給 LINE
+    return client.replyMessage(event.replyToken, { type: 'text', text: fullAnswer });
+    
   } catch (error) {
-    console.error('Dify 連線失敗：', error);
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: '小助手正在整理最新的房產資料，請稍後再試，或直接聯絡蔡顧問！'
+    console.error('Dify 連線失敗:', error);
+    return client.replyMessage(event.replyToken, { 
+      type: 'text', 
+      text: '小助手正在整理最新的房產資料，請稍後再試，或直接聯絡蔡顧問！' 
     });
   }
 }
 
-// 6. 啟動伺服器監聽
-app.listen(port, () => {
-  console.log(`🚀 蔡承宏機器人正在 Port ${port} 運行中`);
-});
+app.listen(port, () => console.log(`🚀 蔡承宏機器人正在 Port ${port} 運行中`));
