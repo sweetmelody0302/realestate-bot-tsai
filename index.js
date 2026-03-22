@@ -12,13 +12,13 @@ const lineConfig = {
 const client = new line.Client(lineConfig);
 
 // ==========================================
-// 1. 被動接收用戶訊息 (Webhook)
+// 1. Webhook (被動回覆)
 // ==========================================
 app.post('/webhook', line.middleware(lineConfig), (req, res) => {
   Promise.all(req.body.events.map(handleEvent))
     .then((result) => res.json(result))
     .catch((err) => {
-      console.error('Webhook 處理錯誤:', err);
+      console.error('Webhook Error:', err);
       res.status(500).end();
     });
 });
@@ -36,34 +36,21 @@ async function handleEvent(event) {
       body: JSON.stringify({
         inputs: {},
         query: event.message.text,
-        response_mode: "streaming", 
+        response_mode: "blocking", // 🚨 暴力破解：強制使用 blocking
         user: event.source.userId
       })
     });
 
-    if (!response.ok) throw new Error(`Dify 伺服器回應錯誤: ${response.status}`);
+    if (!response.ok) throw new Error(`Dify API 錯誤: ${response.status}`);
 
-    let fullAnswer = "";
-    const decoder = new TextDecoder("utf-8");
-    
-    for await (const chunk of response.body) {
-      const text = decoder.decode(chunk);
-      const lines = text.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.substring(6));
-            if (data.answer) fullAnswer += data.answer;
-          } catch (e) {}
-        }
-      }
+    const data = await response.json();
+    let answer = data.answer;
+
+    if (!answer) {
+      answer = "搜尋完畢，但目前沒有找到合適的資料，請稍後再試。";
     }
 
-    if (!fullAnswer || fullAnswer.trim() === "") {
-      fullAnswer = "搜尋完畢，但目前沒有找到合適的資料，請稍後再試。";
-    }
-
-    return client.replyMessage(event.replyToken, { type: 'text', text: fullAnswer });
+    return client.replyMessage(event.replyToken, { type: 'text', text: answer });
     
   } catch (error) {
     console.error('Dify 連線失敗:', error);
@@ -75,7 +62,7 @@ async function handleEvent(event) {
 }
 
 // ==========================================
-// 2. 主動每日定時廣播新聞 (供 cron-job 呼叫)
+// 2. 每日定時推播 (Push-news)
 // ==========================================
 app.post('/push-news', async (req, res) => {
   try {
@@ -88,34 +75,21 @@ app.post('/push-news', async (req, res) => {
       body: JSON.stringify({
         inputs: {},
         query: "請搜尋今天台灣房地產的5則最新新聞，並加上摘要與連結，整理成專業推播文",
-        response_mode: "streaming", 
+        response_mode: "blocking", // 🚨 暴力破解：強制使用 blocking
         user: "system-auto-push"
       })
     });
 
-    if (!response.ok) throw new Error(`Dify 伺服器回應錯誤: ${response.status}`);
+    if (!response.ok) throw new Error(`Dify API 錯誤: ${response.status}`);
 
-    let fullAnswer = "";
-    const decoder = new TextDecoder("utf-8");
-    
-    for await (const chunk of response.body) {
-      const text = decoder.decode(chunk);
-      const lines = text.split('\n');
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.substring(6));
-            if (data.answer) fullAnswer += data.answer;
-          } catch (e) {}
-        }
-      }
+    const data = await response.json();
+    let answer = data.answer;
+
+    if (!answer) {
+        answer = "今日房產新聞整理中，請稍後再為您奉上！";
     }
 
-    if (!fullAnswer || fullAnswer.trim() === "") {
-        fullAnswer = "今日房產新聞整理中，請稍後再為您奉上！";
-    }
-
-    await client.broadcast({ type: 'text', text: fullAnswer });
+    await client.broadcast({ type: 'text', text: answer });
     res.status(200).send('✅ 每日新聞推播成功！');
     
   } catch (error) {
@@ -124,7 +98,4 @@ app.post('/push-news', async (req, res) => {
   }
 });
 
-// ==========================================
-// 3. 啟動伺服器
-// ==========================================
 app.listen(port, () => console.log(`🚀 蔡承宏機器人正在 Port ${port} 運行中`));
