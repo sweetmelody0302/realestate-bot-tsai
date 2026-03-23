@@ -6,7 +6,7 @@ require('dotenv').config();
 const app = express();
 
 const lineConfig = {
-  channelAccessToken: process.env.ACCESS_TOKEN,
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.CHANNEL_SECRET
 };
 const client = new line.Client(lineConfig);
