@@ -12,7 +12,7 @@ const lineConfig = {
 };
 const client = new line.Client(lineConfig);
 
-// 【新增】這顆超強心臟，專門處理 Agent 智能體的「跑馬燈串流 (streaming)」
+// 串流心臟 (強化抓字能力)
 async function askDifyAgent(queryText, userId) {
   const response = await fetch('https://api.dify.ai/v1/chat-messages', {
     method: 'POST',
@@ -24,7 +24,7 @@ async function askDifyAgent(queryText, userId) {
       inputs: {},
       query: queryText,
       user: userId,
-      response_mode: "streaming" // 【關鍵破關】：配合 Dify 智能體，強制改為串流模式！
+      response_mode: "streaming"
     })
   });
 
@@ -33,7 +33,6 @@ async function askDifyAgent(queryText, userId) {
     throw new Error(`Dify 報錯: ${errText}`);
   }
 
-  // 將 Dify 吐出來的碎片，拼湊成完整的文章
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8');
   let finalAnswer = '';
@@ -45,16 +44,19 @@ async function askDifyAgent(queryText, userId) {
     const lines = chunk.split('\n');
     for (const line of lines) {
       if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
         try {
-          const data = JSON.parse(line.slice(6));
-          if (data.event === 'message' || data.event === 'agent_message') {
+          const data = JSON.parse(jsonStr);
+          // 只要裡面有 answer 欄位，就把它拼起來
+          if (data.answer) {
             finalAnswer += data.answer;
           }
-        } catch (e) { /* 忽略格式不符的碎片 */ }
+        } catch (e) { /* 忽略無法解析的碎片 */ }
       }
     }
   }
-  return finalAnswer;
+  return finalAnswer.trim(); // 去除前後多餘的空白
 }
 
 app.get('/', (req, res) => {
@@ -67,18 +69,26 @@ app.post('/push-news', async (req, res) => {
     console.log('收到 cron-job 定時推播指令！');
     res.status(200).send('Push processing...');
 
-    // 呼叫串流心臟去拿新聞
     const newsContent = await askDifyAgent("請幫我整理今天的房地產重要新聞，並加上蔡承宏的問候語。", "system-cron-job");
     
-    console.log('新聞抓取成功，準備發送！');
+    console.log(`新聞抓取成功！內容長度: ${newsContent.length} 個字`);
+
+    // 【關鍵防呆】：如果 Dify 當機沒給新聞 (字數為0)，給一個預設文字，絕對不讓 LINE 報錯 400
+    const textToSend = newsContent || "早安！蔡承宏總經理提醒您，今日的房地產新聞正在整理中，請稍後直接在對話框輸入您的問題喔！";
+
     await client.broadcast({
       type: 'text',
-      text: newsContent
+      text: textToSend
     });
     console.log('🔥 LINE 推播發送成功！');
 
   } catch (error) {
-    console.error('❌ 推播錯誤:', error.message);
+    // 強化報錯機制，如果是 LINE 報錯，直接印出原因
+    if (error.originalError && error.originalError.response) {
+      console.error('❌ LINE 拒絕推播:', JSON.stringify(error.originalError.response.data));
+    } else {
+      console.error('❌ 推播發生錯誤:', error.message);
+    }
   }
 });
 
@@ -89,15 +99,18 @@ app.post('/webhook', line.middleware(lineConfig), (req, res) => {
       if (event.type !== 'message' || event.message.type !== 'text') return null;
 
       try {
-        // 呼叫串流心臟去思考回覆
         const answer = await askDifyAgent(event.message.text, event.source.userId);
+        
+        // 防呆：如果 Dify 沒給答案，給個預設值
+        const replyText = answer || "小編目前腦袋有點卡卡的，請重新再問一次喔！";
+
         return client.replyMessage(event.replyToken, {
           type: 'text',
-          text: answer
+          text: replyText
         });
       } catch (error) {
         console.error('❌ Dify 對話錯誤:', error.message);
-        return client.replyMessage(event.replyToken, { type: 'text', text: '小編正在找資料，請稍後！' });
+        return client.replyMessage(event.replyToken, { type: 'text', text: '系統整理資料中，請稍後！' });
       }
     }))
     .then((result) => res.json(result))
