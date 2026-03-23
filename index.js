@@ -5,9 +5,13 @@ require('dotenv').config();
 
 const app = express();
 
+// 【新增】：讓伺服器可以看懂一般傳進來的資料 (這行非常關鍵！)
+app.use(express.json()); 
+app.use(express.urlencoded({ extended: true }));
+
 const lineConfig = {
-  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.CHANNEL_SECRET
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN, // 這裡已經配對你的變數名稱
+  channelSecret: process.env.CHANNEL_SECRET             // 這裡也是
 };
 const client = new line.Client(lineConfig);
 
@@ -31,7 +35,6 @@ async function handleEvent(event) {
   const userId = event.source.userId;
 
   try {
-    // 【關鍵修正 1】：一般對話加入 inputs 以防 400 錯誤
     const difyResponse = await axios.post('https://api.dify.ai/v1/chat-messages', {
       inputs: { "query": userMessage },
       query: userMessage,
@@ -49,11 +52,7 @@ async function handleEvent(event) {
       text: difyResponse.data.answer
     });
   } catch (error) {
-    if (error.response) {
-      console.error('Dify 對話拒絕原因:', JSON.stringify(error.response.data));
-    } else {
-      console.error('Dify 連線失敗:', error.message);
-    }
+    console.error('Dify 連線失敗:', error.message);
     return client.replyMessage(event.replyToken, { type: 'text', text: '小編正在找資料，請稍後！' });
   }
 }
@@ -61,13 +60,15 @@ async function handleEvent(event) {
 // 2. 處理每天早上的「定時推播」 (cron-job 會打這個網址)
 app.post('/push-news', async (req, res) => {
   try {
-    console.log('收到定時推播指令，開始向 Dify 索取今日新聞...');
+    console.log('收到 cron-job 推播指令！準備執行...');
     
-    // 【關鍵修正 2】：推播功能加入 inputs 以防 400 錯誤
+    // 【新增】：先回覆 cron-job 說「我收到了」，避免它等太久判定 502
+    res.status(200).send('Cron job received, processing...');
+
     const difyResponse = await axios.post('https://api.dify.ai/v1/chat-messages', {
       inputs: { "query": "請幫我整理今天的房地產重要新聞，並加上蔡承宏的問候語。" },
       query: "請幫我整理今天的房地產重要新聞，並加上蔡承宏的問候語。",
-      user: "system-cron-job", // 設定一個假的用戶 ID 代表系統發送
+      user: "system-cron-job", 
       response_mode: "blocking"
     }, {
       headers: {
@@ -77,26 +78,22 @@ app.post('/push-news', async (req, res) => {
     });
 
     const newsContent = difyResponse.data.answer;
+    console.log('新聞抓取成功，準備發送！');
 
-    console.log('新聞抓取成功，準備發送給所有客戶...');
-
-    // 將新聞廣播給所有加好友的人 (注意：此功能需 LINE 官方帳號有推播額度)
     await client.broadcast({
       type: 'text',
       text: newsContent
     });
-
-    console.log('推播完成！');
-    res.status(200).send('Push success');
+    console.log('LINE 推播完成！');
 
   } catch (error) {
-    if (error.response) {
-      console.error('Dify 推播拒絕原因:', JSON.stringify(error.response.data));
-    } else {
-      console.error('推播發生錯誤:', error.message);
-    }
-    res.status(500).send('Push failed');
+    console.error('推播發生錯誤:', error.message);
   }
+});
+
+// 【新增】：加一個簡單的首頁測試，確認伺服器有活著
+app.get('/', (req, res) => {
+  res.send('蔡承宏機器人運作中！');
 });
 
 const port = process.env.PORT || 8080;
